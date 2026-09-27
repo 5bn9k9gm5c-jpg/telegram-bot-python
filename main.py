@@ -10,6 +10,9 @@ load_dotenv()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 MY_TELEGRAM_ID = 464439065
 
+if not TOKEN:
+    raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
+
 DB_PATH = "bot.db"
 
 bot = telebot.TeleBot(TOKEN)
@@ -23,8 +26,8 @@ def db():
 
 def init_db():
     connection = db()
-
-    connection.execute("""
+    connection.execute(
+        """
         CREATE TABLE IF NOT EXISTS searches (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
@@ -35,8 +38,8 @@ def init_db():
             pets INTEGER DEFAULT 1,
             active INTEGER DEFAULT 1
         )
-    """)
-
+        """
+    )
     connection.commit()
     connection.close()
 
@@ -78,7 +81,6 @@ def new_search(message):
     bot.reply_to(
         message,
         "Создадим поиск квартиры.\n\n"
-        "Пока тестируем настройки.\n"
         "Напиши название поиска, например:\n\n"
         "Квартира Летний"
     )
@@ -145,4 +147,121 @@ def searches(message):
         ORDER BY id
         """,
         (MY_TELEGRAM_ID,),
-    ).fetchall
+    ).fetchall()
+
+    connection.close()
+
+    if not rows:
+        bot.reply_to(message, "Сохранённых поисков пока нет.")
+        return
+
+    text = "Твои поиски:\n\n"
+
+    for row in rows:
+        status = "🟢 активен" if row["active"] else "⏸ пауза"
+
+        text += (
+            f"#{row['id']} — {row['name']}\n"
+            f"{status}\n"
+            f"📍 {row['city']}\n"
+            f"💰 до {row['max_price']:,} ₽\n"
+            f"📏 {row['radius_km']} км\n"
+            f"🐈 питомцы: {'да' if row['pets'] else 'нет'}\n\n"
+        )
+
+    bot.reply_to(message, text)
+
+
+@bot.message_handler(commands=["pause"])
+def pause(message):
+    if deny(message):
+        return
+
+    connection = db()
+
+    connection.execute(
+        "UPDATE searches SET active = 0 WHERE user_id = ?",
+        (MY_TELEGRAM_ID,),
+    )
+
+    connection.commit()
+    connection.close()
+
+    bot.reply_to(message, "Мониторинг поставлен на паузу ⏸")
+
+
+@bot.message_handler(commands=["resume"])
+def resume(message):
+    if deny(message):
+        return
+
+    connection = db()
+
+    connection.execute(
+        "UPDATE searches SET active = 1 WHERE user_id = ?",
+        (MY_TELEGRAM_ID,),
+    )
+
+    connection.commit()
+    connection.close()
+
+    bot.reply_to(message, "Мониторинг снова включён 🟢")
+
+
+@bot.message_handler(commands=["settings"])
+def settings(message):
+    if deny(message):
+        return
+
+    bot.reply_to(
+        message,
+        "Текущие настройки:\n\n"
+        "📍 Сочи\n"
+        "🏢 район поиска — около ЖК «Летний»\n"
+        "💰 максимум — 45 000 ₽\n"
+        "🏠 долгосрочная аренда\n"
+        "🐈 питомцы разрешены\n"
+        "📏 радиус — 2 км"
+    )
+
+
+@bot.message_handler(commands=["history"])
+def history(message):
+    if deny(message):
+        return
+
+    bot.reply_to(
+        message,
+        "История объявлений пока пуста.\n\n"
+        "Реальные источники объявлений подключим следующим этапом."
+    )
+
+
+@bot.message_handler(func=lambda message: True)
+def other(message):
+    if deny(message):
+        return
+
+    bot.reply_to(
+        message,
+        "Я пока понимаю только команды.\n\n"
+        "Нажми /start"
+    )
+
+
+init_db()
+
+bot.delete_webhook(drop_pending_updates=True)
+
+print("Bot started successfully")
+
+while True:
+    try:
+        bot.polling(
+            none_stop=True,
+            interval=1,
+            timeout=30,
+        )
+    except Exception as e:
+        print(f"Polling error: {e}")
+        time.sleep(5)
